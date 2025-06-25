@@ -20,7 +20,35 @@ type repr = Unif.repr
 
 let base_rank = 0
 
-module Env = struct
+module Env : sig
+  type t
+
+  val empty : t
+
+  val is_empty : t -> bool
+
+  (* Young generation *)
+
+  val get_young : t -> rank
+
+  val incr_young : t -> t
+
+  val decr_young : t -> t
+
+  (* Pool functions *)
+
+  val pool_is_empty : rank:rank -> t -> bool
+
+  val get_pool : rank:rank -> t -> variable list
+
+  val add_to_pool : variable -> rank:rank -> t -> t
+
+  val clean_pool : rank:rank -> t -> t
+
+  (* Debugging functions *)
+
+  val debug : Unif.Env.t -> t -> PPrint.document
+end = struct
 
   type pool = variable list
   type pools = pool RankMap.t
@@ -101,6 +129,12 @@ end
 
 type uenv = UEnv.t
 type env = Env.t
+
+let add_flexible uenv env var structure =
+  let young = Env.get_young env in
+  let uenv = UEnv.add { var; structure; rank = young; status = Flexible } uenv in
+  let env = Env.add_to_pool var ~rank:young env in
+  (uenv, env)
 
 (* Adjust the rank of the variable's representative
    when it is flexible, i.e., not yet generalized *)
@@ -385,7 +419,6 @@ let exit (uenv : uenv) (env : env) (roots : variable list) : uenv * env * scheme
 (* Instantiate a scheme with a constraint variable *)
 
 let instantiate uenv env ({ root; generics; quantifiers } : scheme) =
-  let young = Env.get_young env in
   let mapping : (variable, variable) Hashtbl.t = Hashtbl.create 16 in
 
   (* Create a flexible copy without structure for each generic variable *)
@@ -395,10 +428,8 @@ let instantiate uenv env ({ root; generics; quantifiers } : scheme) =
       let repr = UEnv.repr var uenv in
       assert (repr.status = Generic);
       let fresh_var = Constraint.Var.fresh ("fresh_" ^ repr.var.name) in
-      let uenv = UEnv.add { var = fresh_var; structure = None; rank = young; status = Flexible } uenv in
-      let env = Env.add_to_pool fresh_var ~rank:(Env.get_young env) env in
       Hashtbl.add mapping var fresh_var;
-      (uenv, env)
+      add_flexible uenv env fresh_var None;
     end
   in
   let (uenv, env) = List.fold_left fresh (uenv, env) (quantifiers @ generics) in

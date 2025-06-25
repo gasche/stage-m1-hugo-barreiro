@@ -19,11 +19,8 @@ module Make (T : Utils.Functor) = struct
     let empty () = { unif = Unif.Env.empty (); gen = Generalization.Env.empty; schemes = SMap.empty }
 
     let add_flexible var structure env =
-      let rank = Generalization.Env.get_young env.gen in
-      { env with
-        unif = Unif.Env.add { var; structure; status = Flexible; rank } env.unif;
-        gen = Generalization.Env.add_to_pool var ~rank env.gen;
-      }
+      let unif, gen = Generalization.add_flexible env.unif env.gen var structure in
+      { env with unif; gen; }
 
     let debug_schemes schemes =
       let open PPrint in

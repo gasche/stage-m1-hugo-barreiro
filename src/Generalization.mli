@@ -12,10 +12,7 @@ val debug_scheme : scheme -> PPrint.document
 
 (* Generalization environment *)
 
-type rank := Unif.rank
 type var := Constraint.variable
-
-val base_rank : int (* The top-level rank *)
 
 module Env : sig
   type t
@@ -24,28 +21,10 @@ module Env : sig
 
   val is_empty : t -> bool
 
-  (* Young generation *)
-
-  val get_young : t -> rank
-
-  val incr_young : t -> t
-
-  val decr_young : t -> t
-
-  (* Pool functions *)
-
-  val pool_is_empty : rank:rank -> t -> bool
-
-  val get_pool : rank:rank -> t -> var list
-
-  val add_to_pool : var -> rank:rank -> t -> t
-
-  val clean_pool : rank:rank -> t -> t
-
-  (* Debugging functions *)
-
   val debug : Unif.Env.t -> t -> PPrint.document
 end
+
+val add_flexible : Unif.Env.t -> Env.t -> var -> Unif.structure -> Unif.Env.t * Env.t
 
 (* Functions for generalization *)
 
