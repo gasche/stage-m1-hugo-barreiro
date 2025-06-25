@@ -1,0 +1,163 @@
+type filter_impl =
+  | Early
+  | Late
+
+let filter_impl_dict : (string * filter_impl) list = [ ("early", Early); ("late", Late) ]
+
+module Dict = struct
+  type ('k, 'v) t = ('k * 'v) list
+
+  let keys dict = List.map fst dict
+
+  let find_val dict k = List.assoc k dict
+
+  let find_key (dict : ('k, 'v) t) (v : 'v) : 'k =
+    List.assoc v (List.map (fun (k, v) -> (v, k)) dict)
+end
+
+let pp_dict_val dict ppf v = Printf.fprintf ppf "%s" (Dict.find_key dict v)
+
+type config = {
+  filter_impl : filter_impl;
+  size : int;
+  count : int;
+}
+
+let pp_config ppf config =
+  let pp_int ppf = Printf.fprintf ppf "%d" in
+  begin[@ocamlformat "disable"]
+    Printf.fprintf ppf
+      "{ filter_impl = %a;\n\
+      \  size = %a;\n\
+      \  count = %a; }\n"
+      (pp_dict_val filter_impl_dict) config.filter_impl
+      pp_int config.size
+      pp_int config.count
+  end
+
+
+let arg_from_dict ~option ~doc dict ref : Arg.key * Arg.spec * Arg.doc =
+  let valid_keys = Dict.keys dict |> String.concat " | " in
+  let on_string s =
+    match Dict.find_val dict s with
+    | v -> ref := v
+    | exception Not_found ->
+      Printf.ksprintf
+        (fun msg -> raise (Arg.Bad msg))
+        "%s: invalid value '%s', expected one of [%s]" option s valid_keys
+  in
+  ( option,
+    Arg.String on_string,
+    Printf.sprintf "<name> %s (default '%s', available [%s])" doc
+      (Dict.find_key dict !ref) valid_keys )
+
+
+let config =
+  let filter_impl = ref (Early : filter_impl) in
+  let size = ref 4 in
+  let count = ref max_int in
+  let benchmark = ref None in
+  let msg = ref None in
+  let fmt fmt_str = Printf.sprintf fmt_str in
+  let usage = fmt "Usage: %s [options]" Sys.argv.(0) in
+
+  let spec =
+    Arg.align
+      [
+        ( "--size",
+          Arg.Set_int size,
+          fmt "<int> Size of generated terms (default %d)" !size );
+        arg_from_dict ~option:"--filter" ~doc:"filtering implementation"
+          filter_impl_dict filter_impl;
+        ( "--count",
+          Arg.Set_int count,
+          fmt "<int> Number of terms to generate. (default '%d')" !count );
+        ( "--benchmark",
+          Arg.Int (fun s -> benchmark := Some s),
+          "<int> Run several times and provide performance metrics. (optional)"
+        );
+        ( "--msg",
+          Arg.String (fun s -> msg := Some s),
+          "<string> Describe the benchmark to get a self-describing log file. \
+           (optional)" );
+      ]
+  in
+
+  Arg.parse spec (fun s -> raise (Arg.Bad s)) usage;
+
+  {
+    filter_impl = !filter_impl;
+    size = !size;
+    count = !count;
+  }
+
+let generate config =
+  let module Gen = Generator.Make (MSeq) in
+  let untyped = Gen.untyped_gasche in
+  let module Unty = Untyped.Make(MSeq) in
+  let rec unfold : Unty.term -> Unty.term MSeq.t =
+    let ( let* ) = MSeq.bind in
+    let ret = MSeq.return in
+    let open Unty in
+    function
+    | Do m -> MSeq.bind m unfold
+    | Var x -> ret (Var x)
+    | App (t1, t2) -> let* t1 = unfold t1 in let* t2 = unfold t2 in ret (App (t1, t2))
+    | Abs (x, t) -> let* t = unfold t in ret (Abs (x, t))
+    | Let (x, t1, t2) ->
+      let* t1 = unfold t1 in
+      let* t2 = unfold t2 in
+      ret (Let (x, t1, t2))
+    | Tuple ts ->
+      begin match ts with
+        | [ t1; t2] ->
+          let* t1 = unfold t1 in let* t2 = unfold t2 in
+          ret (Tuple [ t1; t2 ])
+        | _ -> assert false
+      end
+    | LetTuple (xs, t1, t2) ->
+      let* t1 = unfold t1 in let* t2 = unfold t2 in
+      ret (LetTuple (xs, t1, t2))
+    | Annot (t, ty) ->
+      let* t = unfold t in
+      ret (Annot (t, ty))
+    | Loc (_loc, t) -> unfold t
+  in
+  let typed =
+    match config.filter_impl with
+    | Early ->
+      untyped
+      |> Gen.typed_cut_early ~size:config.size
+      |> MSeq.run
+    | Late ->
+      untyped
+      |> Gen.cut_size ~size:config.size
+      |> unfold
+      |> MSeq.run
+      |> Seq.concat_map (fun untyped ->
+        untyped
+        |> Gen.constraint_
+        |> Gen.solve
+        |> MSeq.run
+        |> Seq.filter_map (function
+          | Ok v -> Some v
+          | Error _ -> None)
+      )
+  in
+  Seq.take config.count typed
+
+let count_terms config =
+  generate config
+  |> Seq.take config.count
+  |> Seq.length
+
+let run_display config =
+  let count = count_terms config in
+  Printf.printf "Found %s well-typed terms of size %d\n%!"
+    (if config.count = max_int then
+       Printf.sprintf "%d" count
+     else
+       Printf.sprintf "%d out of %d" count config.count)
+    config.size
+
+let () = run_display config

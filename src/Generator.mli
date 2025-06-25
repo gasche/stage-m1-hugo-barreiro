@@ -12,6 +12,9 @@ module Make (M : Utils.MonadPlus) : sig
   val constraint_ :
     Untyped.term -> (Typed.term * Typed.scheme, Infer.err) Constraint.t
 
+  val solve :
+    ('a, 'b) Constraint.t -> ('a, 'b) result M.t
+
   val typed_cut_early :
     size:int -> Untyped.term -> (Typed.term * Typed.scheme) M.t
 
